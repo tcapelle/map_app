@@ -1,0 +1,514 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mapa Interactivo - Versión Independiente</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin=""/>
+    
+    <!-- Leaflet JavaScript -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin=""></script>
+    
+    <!-- PapaParse for CSV parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+            width: 100%;
+        }
+        
+        #map {
+            height: 100vh;
+            width: 100%;
+        }
+        
+        .legend {
+            padding: 10px;
+            background: white;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            line-height: 1.5;
+        }
+        
+        .legend i {
+            width: 18px;
+            height: 18px;
+            float: left;
+            margin-right: 8px;
+            opacity: 0.7;
+        }
+        
+        .filter-control {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            max-height: 80vh;
+            overflow-y: auto;
+            display: none; /* Initially hidden until data is loaded */
+        }
+        
+        .filter-option {
+            margin: 5px 0;
+        }
+
+        .file-control {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            background: white;
+            padding: 10px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+        }
+        
+        .file-control h3 {
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        
+        .file-control input {
+            margin-bottom: 10px;
+        }
+        
+        .file-control button {
+            background-color: #4CAF50;
+            color: white;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        
+        .file-control button:hover {
+            background-color: #45a049;
+        }
+        
+        .initial-message {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 0 15px rgba(0,0,0,0.2);
+            text-align: center;
+            max-width: 80%;
+        }
+        
+        .initial-message h2 {
+            margin-top: 0;
+        }
+        
+        .sample-data {
+            text-align: left;
+            background: #f5f5f5;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            margin: 15px 0;
+            overflow-x: auto;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <div id="initial-message" class="initial-message">
+        <h2>Mapa Interactivo</h2>
+        <p>Selecciona un archivo CSV para visualizar datos en el mapa.</p>
+        <p>Formato esperado:</p>
+        <div class="sample-data">
+            Nombre;Latitud;Longitud;Categoría<br>
+            Lugar 1;-33.4513;-70.6653;Tipo1<br>
+            Lugar 2;-33.4246;-70.6141;Tipo2
+        </div>
+        <p>Las columnas pueden tener otros nombres mientras contengan las palabras "nombre", "lat", "long" y una columna final para categoría.</p>
+    </div>
+    
+    <div id="file-control" class="file-control">
+        <h3>Cargar datos</h3>
+        <input type="file" id="csv-file" accept=".csv">
+        <button id="load-button">Cargar datos</button>
+    </div>
+    
+    <div id="filter-control" class="filter-control">
+        <h3>Filtrar por categoría</h3>
+        <div id="category-filters"></div>
+    </div>
+    
+    <script>
+    // Initialize the map
+    const map = L.map('map').setView([-33.6085, -70.5725], 15);
+
+    // Add OpenStreetMap tile layer
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+
+    // Initialize marker layers by category
+    let markersByCategory = {};
+    let allMarkers = [];
+    let categoryColors = {};
+    
+    // Predefined colors for good contrast
+    const colorPalette = [
+        '#FF5733', '#33FF57', '#3357FF', '#FF33A8', '#33A8FF', 
+        '#A833FF', '#FFA833', '#33FFA8', '#FF3333', '#9933FF', 
+        '#33FFFF', '#FFC733', '#33FFC7', '#C733FF', '#FF33C7',
+        '#4287f5', '#f542a1', '#42f56c', '#f5ad42', '#7842f5',
+        '#f54242', '#42f5f5', '#e042f5', '#f5e042', '#42f5a1'
+    ];
+    
+    // Generate a color for a category
+    function getColorForCategory(category) {
+        // If we already assigned a color to this category, return it
+        if (categoryColors[category]) {
+            return categoryColors[category];
+        }
+        
+        // Special case for "-" or unknown category
+        if (category === '-' || category === undefined) {
+            categoryColors[category] = '#999999';
+            return categoryColors[category];
+        }
+        
+        // Get the current count of categories to determine which color to use
+        const categoryCount = Object.keys(categoryColors).length;
+        
+        // If we have more categories than predefined colors, generate a random color
+        if (categoryCount >= colorPalette.length) {
+            const randomColor = '#' + Math.floor(Math.random()*16777215).toString(16);
+            categoryColors[category] = randomColor;
+            return randomColor;
+        }
+        
+        // Use a predefined color from the palette
+        categoryColors[category] = colorPalette[categoryCount];
+        return categoryColors[category];
+    }
+    
+    // UI control elements
+    const fileInput = document.getElementById('csv-file');
+    const loadButton = document.getElementById('load-button');
+    const initialMessage = document.getElementById('initial-message');
+    const filterControl = document.getElementById('filter-control');
+    
+    // Load button click handler
+    loadButton.addEventListener('click', function() {
+        // Check if file is selected
+        const file = fileInput.files[0];
+        if (!file) {
+            alert('Por favor selecciona un archivo CSV');
+            return;
+        }
+        
+        // Clear existing markers
+        clearMap();
+        
+        // Read and process the file
+        const reader = new FileReader();
+        reader.onload = function(e) {
+            const csvData = e.target.result;
+            processCSVData(csvData);
+            
+            // Hide initial message and show filters once data is loaded
+            initialMessage.style.display = 'none';
+            filterControl.style.display = 'block';
+        };
+        reader.readAsText(file);
+    });
+    
+    // Clear all markers from the map
+    function clearMap() {
+        allMarkers.forEach(marker => marker.remove());
+        markersByCategory = {};
+        allMarkers = [];
+        categoryColors = {}; // Reset category colors
+        
+        // Clear filters
+        const filterContainer = document.getElementById('category-filters');
+        filterContainer.innerHTML = '';
+    }
+    
+    // Process CSV data and add markers to map
+    function processCSVData(csvData) {
+        // Parse the CSV data
+        const results = Papa.parse(csvData, {
+            header: true,
+            delimiter: ';',
+            skipEmptyLines: true
+        });
+
+        const locations = results.data;
+        console.log("Headers:", results.meta.fields);
+        
+        // Detect the last column as the category column (since it has encoding issues)
+        const categoryKey = results.meta.fields[results.meta.fields.length - 1];
+        console.log("Using category column:", categoryKey);
+        
+        // Find coordinate columns
+        const latKey = results.meta.fields.find(field => 
+            field.toLowerCase().includes('lat') || 
+            field.toLowerCase().includes('lati')
+        ) || 'Latitud';
+        
+        const lngKey = results.meta.fields.find(field => 
+            field.toLowerCase().includes('lon') || 
+            field.toLowerCase().includes('lng') || 
+            field.toLowerCase().includes('long')
+        ) || 'Longitud';
+        
+        const nameKey = results.meta.fields.find(field => 
+            field.toLowerCase().includes('nom') || 
+            field.toLowerCase().includes('name')
+        ) || 'Nombre';
+        
+        console.log(`Using columns: Name=${nameKey}, Lat=${latKey}, Lng=${lngKey}, Category=${categoryKey}`);
+        
+        // Extract unique categories first
+        const uniqueCategories = new Set();
+        locations.forEach(location => {
+            if (location[categoryKey]) {
+                // Clean category value - get first number or use the value as is
+                let category = location[categoryKey];
+                const match = String(category).match(/\d+/);
+                if (match) {
+                    category = match[0];
+                }
+                uniqueCategories.add(category);
+            }
+        });
+        
+        // Assign colors to each unique category before creating markers
+        uniqueCategories.forEach(category => {
+            getColorForCategory(category);
+        });
+        
+        console.log("Categories and colors:", categoryColors);
+        
+        // Process each location
+        locations.forEach(location => {
+            if (!location[latKey] || !location[lngKey]) return;
+            
+            // Convert string coordinates to numbers
+            const lat = parseFloat(String(location[latKey]).replace(',', '.'));
+            const lng = parseFloat(String(location[lngKey]).replace(',', '.'));
+            
+            if (isNaN(lat) || isNaN(lng)) return;
+            
+            // Extract the category value from the last column
+            let rawCategory = location[categoryKey];
+            let category = '-';
+            
+            // Clean the category value
+            if (rawCategory) {
+                // Extract any numeric value from the string
+                const match = String(rawCategory).match(/\d+/);
+                if (match) {
+                    category = match[0];
+                } else {
+                    // If no number found, use the raw value
+                    category = String(rawCategory).trim();
+                }
+            }
+            
+            const name = location[nameKey] || 'Sin nombre';
+            
+            // Create marker with custom icon
+            const marker = L.circleMarker([lat, lng], {
+                radius: 8,
+                fillColor: getColorForCategory(category),
+                color: '#000',
+                weight: 1,
+                opacity: 1,
+                fillOpacity: 0.8
+            });
+            
+            // Add popup with information
+            marker.bindPopup(`
+                <strong>${name}</strong><br>
+                Categoría: ${category}<br>
+                Coordenadas: ${lat}, ${lng}
+            `);
+            
+            // Store marker reference by category
+            if (!markersByCategory[category]) {
+                markersByCategory[category] = [];
+            }
+            markersByCategory[category].push(marker);
+            allMarkers.push(marker);
+            
+            // Add marker to map
+            marker.addTo(map);
+        });
+        
+        // Log unique categories found
+        const uniqueCategoriesFound = Object.keys(markersByCategory);
+        console.log("Categories found with markers:", uniqueCategoriesFound);
+        
+        // Set map view to fit all markers
+        if (allMarkers.length > 0) {
+            const group = L.featureGroup(allMarkers);
+            map.fitBounds(group.getBounds(), { padding: [50, 50] });
+        }
+        
+        // Create category filter UI
+        createCategoryFilters();
+        
+        // Add legend to map
+        createLegend();
+    }
+
+    // Create category filter checkboxes
+    function createCategoryFilters() {
+        const filterContainer = document.getElementById('category-filters');
+        filterContainer.innerHTML = ''; // Clear existing filters
+        
+        // Add "All" option
+        const allDiv = document.createElement('div');
+        allDiv.className = 'filter-option';
+        
+        const allCheckbox = document.createElement('input');
+        allCheckbox.type = 'checkbox';
+        allCheckbox.id = 'filter-all';
+        allCheckbox.checked = true;
+        
+        const allLabel = document.createElement('label');
+        allLabel.htmlFor = 'filter-all';
+        allLabel.appendChild(document.createTextNode('Mostrar todo'));
+        
+        allDiv.appendChild(allCheckbox);
+        allDiv.appendChild(allLabel);
+        filterContainer.appendChild(allDiv);
+        
+        // Event listener for "All" checkbox
+        allCheckbox.addEventListener('change', function() {
+            const checkboxes = document.querySelectorAll('#category-filters input[type="checkbox"]:not(#filter-all)');
+            checkboxes.forEach(cb => {
+                cb.checked = this.checked;
+                toggleCategoryVisibility(cb.dataset.category, cb.checked);
+            });
+        });
+        
+        // Add category options for available categories only
+        Object.keys(markersByCategory).sort((a, b) => {
+            // Sort numerically if both are numbers, otherwise alphabetically
+            // Put "-" at the end
+            if (a === '-') return 1;
+            if (b === '-') return -1;
+            if (!isNaN(parseInt(a)) && !isNaN(parseInt(b))) {
+                return parseInt(a) - parseInt(b);
+            }
+            return a.localeCompare(b);
+        }).forEach(category => {
+            const div = document.createElement('div');
+            div.className = 'filter-option';
+            
+            const checkbox = document.createElement('input');
+            checkbox.type = 'checkbox';
+            checkbox.id = `filter-${category}`;
+            checkbox.dataset.category = category;
+            checkbox.checked = true;
+            
+            const label = document.createElement('label');
+            label.htmlFor = `filter-${category}`;
+            
+            const colorSquare = document.createElement('span');
+            colorSquare.style.display = 'inline-block';
+            colorSquare.style.width = '12px';
+            colorSquare.style.height = '12px';
+            colorSquare.style.backgroundColor = getColorForCategory(category);
+            colorSquare.style.marginRight = '5px';
+            
+            label.appendChild(colorSquare);
+            label.appendChild(document.createTextNode(`Categoría ${category}`));
+            
+            div.appendChild(checkbox);
+            div.appendChild(label);
+            filterContainer.appendChild(div);
+            
+            // Event listener for category checkbox
+            checkbox.addEventListener('change', function() {
+                toggleCategoryVisibility(this.dataset.category, this.checked);
+                updateAllCheckbox();
+            });
+        });
+    }
+
+    // Toggle visibility of markers by category
+    function toggleCategoryVisibility(category, visible) {
+        if (markersByCategory[category]) {
+            markersByCategory[category].forEach(marker => {
+                if (visible) {
+                    marker.addTo(map);
+                } else {
+                    marker.remove();
+                }
+            });
+        }
+    }
+
+    // Update "All" checkbox state
+    function updateAllCheckbox() {
+        const categoryCheckboxes = document.querySelectorAll('#category-filters input[type="checkbox"]:not(#filter-all)');
+        const allChecked = Array.from(categoryCheckboxes).every(cb => cb.checked);
+        document.getElementById('filter-all').checked = allChecked;
+    }
+
+    // Create map legend
+    function createLegend() {
+        // Remove existing legend if any
+        const existingLegend = document.querySelector('.leaflet-control.legend');
+        if (existingLegend) {
+            existingLegend.remove();
+        }
+        
+        const legend = L.control({ position: 'bottomleft' });
+        
+        legend.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'legend');
+            let content = '<h4>Categorías</h4>';
+            
+            Object.keys(markersByCategory).sort((a, b) => {
+                // Sort numerically if both are numbers, otherwise alphabetically
+                // Put "-" at the end
+                if (a === '-') return 1;
+                if (b === '-') return -1;
+                if (!isNaN(parseInt(a)) && !isNaN(parseInt(b))) {
+                    return parseInt(a) - parseInt(b);
+                }
+                return a.localeCompare(b);
+            }).forEach(category => {
+                content += `
+                    <div>
+                        <i style="background: ${getColorForCategory(category)}"></i>
+                        Categoría ${category}
+                    </div>
+                `;
+            });
+            
+            div.innerHTML = content;
+            return div;
+        };
+        
+        legend.addTo(map);
+    }
+    </script>
+</body>
+</html> 
