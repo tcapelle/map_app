@@ -1,0 +1,13 @@
+1: Restaurant
+2: Cafetería - Pastelería
+3: Servicios
+4: Venta por mayor y por menor
+5: Social
+6: Punto de conflicto
+7: Oportunidad # Note: Mapped to 7 as per user's request, though CSV has Colegios/Residencial as 7
+8: Salud # Note: Mapped to 8 as per user's request, though CSV has Salud as 8
+9: Empresas
+10: Manufactura
+11: Bar
+12: Empresa # Note: Duplicate semantic meaning with 9?
+13: Banco # Added based on CSV data 

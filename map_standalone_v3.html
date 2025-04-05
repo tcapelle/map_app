@@ -18,6 +18,9 @@
     <!-- PapaParse for CSV parsing -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
     
+    <!-- js-yaml for YAML parsing -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/js-yaml/4.1.0/js-yaml.min.js"></script>
+    
     <style>
         body, html {
             margin: 0;
@@ -166,6 +169,20 @@
     let allMarkers = [];
     let categoryColors = {};
     
+    // Category Name Mapping (will be loaded from YAML)
+    let categoryNameMapping = {}; 
+    
+    // Helper function to get category name
+    function getCategoryName(categoryNumber) {
+        console.log("Looking up category name for:", categoryNumber);
+        // First try directly, then try as string with trimming
+        const result = categoryNameMapping[categoryNumber] || 
+                      categoryNameMapping[String(categoryNumber).trim()] || 
+                      `Categoría ${categoryNumber}`; 
+        console.log("Found category name:", result);
+        return result; // Fallback to number if not mapped
+    }
+
     // Predefined colors for good contrast
     const colorPalette = [
         '#FF5733', '#33FF57', '#3357FF', '#FF33A8', '#33A8FF', 
@@ -209,8 +226,40 @@
     const initialMessage = document.getElementById('initial-message');
     const filterControl = document.getElementById('filter-control');
     
+    // Function to load YAML mapping
+    async function loadCategoryMapping() {
+        try {
+            const response = await fetch('category_mapping.yaml');
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
+            }
+            const yamlText = await response.text();
+            categoryNameMapping = jsyaml.load(yamlText);
+            console.log("Category mapping loaded:", categoryNameMapping);
+        } catch (error) {
+            console.error("Error loading category mapping:", error);
+            console.log("Will attempt to use hardcoded mapping");
+            // Provide a default mapping with values from the YAML file
+            categoryNameMapping = {
+                "1": "Restaurant",
+                "2": "Cafetería - Pastelería",
+                "3": "Servicios",
+                "4": "Venta por mayor y por menor",
+                "5": "Social",
+                "6": "Punto de conflicto",
+                "7": "Oportunidad",
+                "8": "Salud",
+                "9": "Empresas",
+                "10": "Manufactura",
+                "11": "Bar",
+                "12": "Empresa",
+                "13": "Banco"
+            };
+        }
+    }
+
     // Load button click handler
-    loadButton.addEventListener('click', function() {
+    loadButton.addEventListener('click', async function() {
         // Check if file is selected
         const file = fileInput.files[0];
         if (!file) {
@@ -221,11 +270,18 @@
         // Clear existing markers
         clearMap();
         
+        // Make sure category mapping is loaded before proceeding
+        if (Object.keys(categoryNameMapping).length === 0) {
+            console.log("Category mapping not yet loaded, loading now...");
+            await loadCategoryMapping();
+            console.log("Category mapping now loaded:", categoryNameMapping);
+        }
+        
         // Read and process the file
         const reader = new FileReader();
         reader.onload = function(e) {
             const csvData = e.target.result;
-            processCSVData(csvData);
+            processCSVData(csvData); // Process CSV after mapping is loaded
             
             // Hide initial message and show filters once data is loaded
             initialMessage.style.display = 'none';
@@ -252,7 +308,8 @@
         const results = Papa.parse(csvData, {
             header: true,
             delimiter: ';',
-            skipEmptyLines: true
+            skipEmptyLines: true,
+            encoding: "UTF-8"
         });
 
         const locations = results.data;
@@ -261,6 +318,13 @@
         // Detect the last column as the category column (since it has encoding issues)
         const categoryKey = results.meta.fields[results.meta.fields.length - 1];
         console.log("Using category column:", categoryKey);
+        
+        // Fix for encoding issues - always use the last column as the category
+        if (categoryKey.includes('Categor')) {
+            console.log("Category column includes 'Categor', proceeding with this column");
+        } else {
+            console.log("Using last column for categories due to possible encoding issues");
+        }
         
         // Find coordinate columns
         const latKey = results.meta.fields.find(field => 
@@ -322,10 +386,14 @@
                 const match = String(rawCategory).match(/\d+/);
                 if (match) {
                     category = match[0];
+                    console.log(`Extracted category number ${category} from ${rawCategory}`);
                 } else {
                     // If no number found, use the raw value
                     category = String(rawCategory).trim();
+                    console.log(`Using raw category value: ${category}`);
                 }
+            } else {
+                console.log("No category found, using default '-'");
             }
             
             const name = location[nameKey] || 'Sin nombre';
@@ -343,7 +411,7 @@
             // Add popup with information
             marker.bindPopup(`
                 <strong>${name}</strong><br>
-                Categoría: ${category}<br>
+                Categoría: ${getCategoryName(category)}<br>
                 Coordenadas: ${lat}, ${lng}
             `);
             
@@ -437,7 +505,7 @@
             colorSquare.style.marginRight = '5px';
             
             label.appendChild(colorSquare);
-            label.appendChild(document.createTextNode(`Categoría ${category}`));
+            label.appendChild(document.createTextNode(getCategoryName(category)));
             
             div.appendChild(checkbox);
             div.appendChild(label);
@@ -498,7 +566,7 @@
                 content += `
                     <div>
                         <i style="background: ${getColorForCategory(category)}"></i>
-                        Categoría ${category}
+                        ${getCategoryName(category)}
                     </div>
                 `;
             });
@@ -509,6 +577,15 @@
         
         legend.addTo(map);
     }
+
+    // Initialize the app: Load mapping first, then setup map
+    async function initializeApp() {
+        await loadCategoryMapping();
+        // Now the map and other initializations can proceed
+        // (Map initialization is already outside, which is fine)
+    }
+
+    initializeApp(); // Call the initialization function
     </script>
 </body>
 </html> 
